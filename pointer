@@ -1,5 +1,8 @@
 // ==UserScript==
-// @name         Pointer V1 (改良版)
+// @name         Pointer V1 全文差し替え版
+// @namespace    http://tampermonkey.net/
+// @version      1.0.1
+// @description  デジカル受付画面で SCN+患者番号 を読み取り、予約患者一覧から完全一致検索して鉛筆ボタンを押す。手入力/スキャナー切替、ON/OFF、ドラッグ移動、最小化、読取表示つき。
 // @match        https://digikar.jp/reception/*
 // @match        https://*.digikar.jp/reception/*
 // @grant        none
@@ -8,229 +11,502 @@
 (function () {
   'use strict';
 
-  /********************
+  /******************************************************************
+   * Pointer V1
+   * 前提
+   * - 受付画面に表示されている = 予約あり患者一覧
+   * - 一覧は全件DOMにある
+   * - 患者番号はDOMにある
+   * - 一致後に押す対象は保険欄の鉛筆マーク
+   *
+   * 使い方
+   * - ON/OFF で機能切替
+   * - Scanner / Manual で入力モード切替
+   * - Scanner: スキャナー入力を監視
+   * - Manual : 入力欄に SCN+110020 のように入れて実行
+   *
+   * 注意
+   * - 行selector、鉛筆selectorは環境により調整が必要
+   ******************************************************************/
+
+  /******************************************************************
    * 設定
-   ********************/
-  const SCAN_PREFIX = "SCN:";
-  const PROCESS_LOCK_TIME = 2000;
+   ******************************************************************/
+  const PREFIX = 'SCN+';
+  const DUPLICATE_GUARD_MS = 2000;
+  const SEARCH_DELAY_MS = 150;
 
-  let buffer = "";
-  let isProcessing = false;
-  let lastScannedId = "";
-  let lastScanTime = 0;
+  // 必要に応じてここを調整
+  const ROW_SELECTORS = [
+    'tr',
+    '[role="row"]'
+  ];
 
+  const EDIT_BUTTON_SELECTORS = [
+    'button[title*="保険"]',
+    'button[aria-label*="保険"]',
+    '.fa-pencil',
+    '.fa-pen',
+    '.glyphicon-pencil',
+    '[class*="pencil"]',
+    '[class*="edit"]',
+    'button'
+  ];
+
+  /******************************************************************
+   * 状態
+   ******************************************************************/
   let isEnabled = true;
-  let mode = "scanner"; // scanner / manual
+  let inputMode = 'scanner'; // 'scanner' | 'manual'
+  let isProcessing = false;
+  let lastScannedId = '';
+  let lastScanAt = 0;
+  let buffer = '';
 
-  /********************
+  /******************************************************************
    * UI
-   ********************/
-  const panel = document.createElement("div");
-  panel.style.position = "fixed";
-  panel.style.top = "10px";
-  panel.style.right = "10px";
-  panel.style.background = "#222";
-  panel.style.color = "#fff";
-  panel.style.padding = "10px";
-  panel.style.zIndex = 9999;
-  panel.style.fontSize = "12px";
+   ******************************************************************/
+  const panel = document.createElement('div');
+  panel.id = 'pointer-v1-panel';
+  panel.style.position = 'fixed';
+  panel.style.top = '60px';
+  panel.style.right = '20px';
+  panel.style.width = '320px';
+  panel.style.background = '#ffffff';
+  panel.style.color = '#000000';
+  panel.style.border = '1px solid #000000';
+  panel.style.borderRadius = '8px';
+  panel.style.boxShadow = '0 4px 10px rgba(0,0,0,0.2)';
+  panel.style.zIndex = '2147483647';
+  panel.style.fontSize = '12px';
+  panel.style.fontFamily = 'Arial, sans-serif';
+  panel.style.userSelect = 'none';
 
   panel.innerHTML = `
-    <div><b>Pointer V1</b></div>
+    <div id="pointer-v1-header" style="cursor: move; background: #f3f3f3; padding: 8px; border-bottom: 1px solid #000; display:flex; align-items:center; justify-content:space-between; border-top-left-radius:8px; border-top-right-radius:8px;">
+      <div style="font-weight: bold;">Pointer V1</div>
+      <div style="display:flex; gap:4px;">
+        <button id="pointer-v1-toggle" style="padding:2px 8px;">ON</button>
+        <button id="pointer-v1-mode" style="padding:2px 8px;">Scanner</button>
+        <button id="pointer-v1-minimize" style="padding:2px 8px;">－</button>
+      </div>
+    </div>
 
-    <label>
-      <input type="checkbox" id="pointer-enable" checked>
-      ON/OFF
-    </label>
+    <div id="pointer-v1-body" style="padding: 8px;">
+      <div style="margin-bottom:6px;">
+        <div style="margin-bottom:4px;">入力</div>
+        <input id="pointer-v1-input" type="text" placeholder="SCN+110020" style="width:100%; box-sizing:border-box; padding:6px; background:#fff; color:#000; border:1px solid #000;" />
+      </div>
 
-    <br>
+      <div style="display:flex; gap:6px; margin-bottom:8px;">
+        <button id="pointer-v1-exec" style="flex:1; padding:6px;">実行</button>
+        <button id="pointer-v1-clear" style="width:72px; padding:6px;">クリア</button>
+      </div>
 
-    <label>
-      <input type="radio" name="mode" value="scanner" checked>
-      Scanner
-    </label>
-    <label>
-      <input type="radio" name="mode" value="manual">
-      Manual
-    </label>
+      <div style="border:1px solid #000; padding:6px; margin-bottom:6px; background:#fff;">
+        <div style="font-weight:bold; margin-bottom:4px;">読取文字</div>
+        <div id="pointer-v1-raw" style="word-break:break-all; min-height:18px;">-</div>
+      </div>
 
-    <br>
+      <div style="border:1px solid #000; padding:6px; margin-bottom:6px; background:#fff;">
+        <div style="font-weight:bold; margin-bottom:4px;">正規化後</div>
+        <div id="pointer-v1-normalized" style="word-break:break-all; min-height:18px;">-</div>
+      </div>
 
-    <input id="pointer-input" placeholder="SCN:123456" style="width:140px;">
-    <button id="pointer-btn">実行</button>
+      <div style="border:1px solid #000; padding:6px; margin-bottom:6px; background:#fff;">
+        <div style="font-weight:bold; margin-bottom:4px;">結果</div>
+        <div id="pointer-v1-result" style="word-break:break-all; min-height:18px;">待機中</div>
+      </div>
 
-    <div id="pointer-log" style="margin-top:5px;"></div>
+      <div style="border:1px solid #000; padding:6px; background:#fff;">
+        <div style="font-weight:bold; margin-bottom:4px;">補足</div>
+        <div id="pointer-v1-detail" style="word-break:break-all; min-height:18px;">-</div>
+      </div>
+    </div>
   `;
 
   document.body.appendChild(panel);
 
-  const inputBox = document.getElementById("pointer-input");
+  const elHeader = document.getElementById('pointer-v1-header');
+  const elBody = document.getElementById('pointer-v1-body');
+  const elToggle = document.getElementById('pointer-v1-toggle');
+  const elMode = document.getElementById('pointer-v1-mode');
+  const elMin = document.getElementById('pointer-v1-minimize');
+  const elInput = document.getElementById('pointer-v1-input');
+  const elExec = document.getElementById('pointer-v1-exec');
+  const elClear = document.getElementById('pointer-v1-clear');
+  const elRaw = document.getElementById('pointer-v1-raw');
+  const elNormalized = document.getElementById('pointer-v1-normalized');
+  const elResult = document.getElementById('pointer-v1-result');
+  const elDetail = document.getElementById('pointer-v1-detail');
 
-  /********************
-   * UI制御
-   ********************/
-  document.getElementById("pointer-enable").onchange = (e) => {
-    isEnabled = e.target.checked;
-    log("状態: " + (isEnabled ? "ON" : "OFF"));
-  };
-
-  document.querySelectorAll("input[name='mode']").forEach(r => {
-    r.onchange = (e) => {
-      mode = e.target.value;
-      log("モード: " + mode);
-    };
-  });
-
-  document.getElementById("pointer-btn").onclick = () => {
-    processScan(inputBox.value);
-  };
-
-  /********************
-   * ログ
-   ********************/
-  function log(msg) {
-    document.getElementById("pointer-log").innerText = msg;
-    console.log("[Pointer]", msg);
+  /******************************************************************
+   * UI補助
+   ******************************************************************/
+  function setResult(text) {
+    elResult.textContent = text;
+    console.log('[Pointer V1][RESULT]', text);
   }
 
-  /********************
-   * キーボード入力（画面全体）
-   ********************/
-  document.addEventListener("keydown", (e) => {
-
-    if (!isEnabled) return;
-
-    // Manualモードは input にフォーカス
-    if (mode === "manual") {
-      if (document.activeElement !== inputBox) {
-        inputBox.focus();
-      }
-    }
-
-    // Scannerモードのみ buffer使用
-    if (mode === "scanner") {
-      if (e.key === "Enter") {
-        if (buffer.startsWith(SCAN_PREFIX)) {
-          processScan(buffer);
-        }
-        buffer = "";
-      } else if (e.key.length === 1) {
-        buffer += e.key;
-      }
-    }
-
-    // 入力内容を可視化（両モード）
-    if (e.key.length === 1) {
-      inputBox.value += e.key;
-    }
-
-    if (e.key === "Backspace") {
-      inputBox.value = inputBox.value.slice(0, -1);
-    }
-
-    if (e.key === "Enter" && mode === "manual") {
-      processScan(inputBox.value);
-      inputBox.value = "";
-    }
-
-  });
-
-  /********************
-   * メイン処理
-   ********************/
-  function processScan(raw) {
-
-    if (!isEnabled) return;
-    if (isProcessing) return;
-
-    const parsed = parseInput(raw);
-    if (!parsed.ok) {
-      log("入力エラー");
-      return;
-    }
-
-    const patientId = parsed.id;
-
-    // 二重送信防止
-    if (
-      lastScannedId === patientId &&
-      Date.now() - lastScanTime < PROCESS_LOCK_TIME
-    ) {
-      log("二重送信防止");
-      return;
-    }
-
-    isProcessing = true;
-    lastScannedId = patientId;
-    lastScanTime = Date.now();
-
-    log("検索中: " + patientId);
-
-    setTimeout(() => {
-      searchAndSelect(patientId);
-      isProcessing = false;
-    }, 200);
+  function setDetail(text) {
+    elDetail.textContent = text;
+    console.log('[Pointer V1][DETAIL]', text);
   }
 
-  /********************
+  function setRaw(text) {
+    elRaw.textContent = text || '-';
+  }
+
+  function setNormalized(text) {
+    elNormalized.textContent = text || '-';
+  }
+
+  function syncModeUI() {
+    elMode.textContent = inputMode === 'scanner' ? 'Scanner' : 'Manual';
+    elInput.readOnly = inputMode === 'scanner';
+    elInput.placeholder = inputMode === 'scanner' ? 'Scanner待機中' : 'SCN+110020';
+    if (inputMode === 'scanner') {
+      elInput.value = buffer;
+    }
+  }
+
+  function syncToggleUI() {
+    elToggle.textContent = isEnabled ? 'ON' : 'OFF';
+  }
+
+  /******************************************************************
+   * 正規化
+   ******************************************************************/
+  function normalizeScanText(text) {
+    return String(text ?? '')
+      .trim()
+      .replace(/＋/g, '+')
+      .replace(/\s+/g, '')
+      .toUpperCase();
+  }
+
+  /******************************************************************
    * 入力解析
-   ********************/
-  function parseInput(raw) {
-    raw = raw.trim();
+   ******************************************************************/
+  function parseInput(rawText) {
+    const normalized = normalizeScanText(rawText);
 
-    if (!raw.startsWith(SCAN_PREFIX)) {
-      return { ok: false };
+    setRaw(String(rawText ?? ''));
+    setNormalized(normalized);
+
+    if (!normalized.startsWith(PREFIX)) {
+      return {
+        ok: false,
+        reason: 'prefix_error',
+        normalized
+      };
     }
 
-    const id = raw.replace(SCAN_PREFIX, "").trim();
+    const patientId = normalized.slice(PREFIX.length);
 
-    if (!/^\d+$/.test(id)) {
-      return { ok: false };
+    if (!/^\d+$/.test(patientId)) {
+      return {
+        ok: false,
+        reason: 'id_error',
+        normalized
+      };
     }
 
-    return { ok: true, id };
+    return {
+      ok: true,
+      patientId,
+      normalized
+    };
   }
 
-  /********************
-   * DOM走査
-   ********************/
-  function searchAndSelect(patientId) {
+  /******************************************************************
+   * 患者行取得
+   ******************************************************************/
+  function getAllCandidateRows() {
+    const rows = [];
+    const seen = new Set();
 
-    const rows = document.querySelectorAll("tr"); // ←ここは後で調整
+    for (const selector of ROW_SELECTORS) {
+      document.querySelectorAll(selector).forEach((node) => {
+        const text = (node.innerText || '').trim();
+        if (!text) return;
+        if (seen.has(node)) return;
+        seen.add(node);
+        rows.push(node);
+      });
+    }
 
-    let matches = [];
+    return rows;
+  }
 
-    rows.forEach(row => {
-      if (row.innerText.includes(patientId)) {
+  /******************************************************************
+   * 患者番号が完全一致するか判定
+   * 部分一致による取り違え防止
+   ******************************************************************/
+  function isExactPatientIdMatch(text, patientId) {
+    const normalizedText = String(text ?? '').replace(/\s+/g, ' ');
+    const escaped = patientId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+    // 数字の前後が数字でないことを要求
+    const re = new RegExp(`(^|\\D)${escaped}(\\D|$)`);
+    return re.test(normalizedText);
+  }
+
+  /******************************************************************
+   * 患者行検索
+   ******************************************************************/
+  function findMatchingRows(patientId) {
+    const allRows = getAllCandidateRows();
+    const matches = [];
+
+    allRows.forEach((row) => {
+      const text = row.innerText || '';
+      if (isExactPatientIdMatch(text, patientId)) {
         matches.push(row);
       }
     });
 
+    return {
+      allRows,
+      matches
+    };
+  }
+
+  /******************************************************************
+   * 鉛筆ボタン探索
+   ******************************************************************/
+  function findEditButton(row) {
+    for (const selector of EDIT_BUTTON_SELECTORS) {
+      const found = row.querySelector(selector);
+      if (found) return found;
+    }
+    return null;
+  }
+
+  /******************************************************************
+   * 一致患者を選択
+   ******************************************************************/
+  function clickMatchedRowEdit(row) {
+    const btn = findEditButton(row);
+
+    if (!btn) {
+      setDetail('鉛筆ボタン未検出');
+      return false;
+    }
+
+    btn.click();
+    setDetail('鉛筆ボタンをクリックしました');
+    return true;
+  }
+
+  /******************************************************************
+   * メイン検索処理
+   ******************************************************************/
+  function searchAndSelect(patientId) {
+    const { allRows, matches } = findMatchingRows(patientId);
+
+    setDetail(`走査行数: ${allRows.length}`);
+
+    if (matches.length === 0) {
+      setResult('0件ヒット');
+      setDetail('受付画面に該当患者なし → 予約なし候補（デジスマへ）');
+      return;
+    }
+
+    setResult(`${matches.length}件ヒット`);
+
     if (matches.length === 1) {
-      log("一致あり");
-      clickEdit(matches[0]);
-
-    } else if (matches.length === 0) {
-      log("予約なし → デジスマ");
-
-    } else {
-      log("複数候補 → 停止");
+      const ok = clickMatchedRowEdit(matches[0]);
+      if (ok) {
+        setResult('1件ヒット → 選択');
+      } else {
+        setResult('1件ヒット → 鉛筆未検出');
+      }
+      return;
     }
+
+    setDetail('複数候補ありのため自動選択停止');
   }
 
-  /********************
-   * クリック
-   ********************/
-  function clickEdit(row) {
-
-    const btn = row.querySelector("button, .edit, .pencil");
-
-    if (btn) {
-      btn.click();
-      log("受付へ");
-    } else {
-      log("ボタン未検出");
+  /******************************************************************
+   * 実行処理
+   ******************************************************************/
+  function processScan(rawText) {
+    if (!isEnabled) {
+      setResult('OFFのため停止中');
+      return;
     }
+
+    if (isProcessing) {
+      setResult('処理中のため待機');
+      return;
+    }
+
+    const parsed = parseInput(rawText);
+
+    if (!parsed.ok) {
+      if (parsed.reason === 'prefix_error') {
+        setResult('プレフィックスエラー');
+        setDetail(`期待値: ${PREFIX}`);
+      } else if (parsed.reason === 'id_error') {
+        setResult('IDエラー');
+        setDetail('プレフィックス以後は数字のみ');
+      } else {
+        setResult('入力エラー');
+        setDetail('-');
+      }
+      return;
+    }
+
+    const { patientId } = parsed;
+
+    if (lastScannedId === patientId && Date.now() - lastScanAt < DUPLICATE_GUARD_MS) {
+      setResult('二重送信防止');
+      setDetail(`同一ID ${patientId} を ${DUPLICATE_GUARD_MS}ms 以内に再読取`);
+      return;
+    }
+
+    lastScannedId = patientId;
+    lastScanAt = Date.now();
+    isProcessing = true;
+
+    setResult(`検索中: ${patientId}`);
+    setDetail('受付画面を走査しています');
+
+    window.setTimeout(() => {
+      try {
+        searchAndSelect(patientId);
+      } catch (err) {
+        console.error('[Pointer V1][ERROR]', err);
+        setResult('検索エラー');
+        setDetail(err && err.message ? err.message : String(err));
+      } finally {
+        isProcessing = false;
+      }
+    }, SEARCH_DELAY_MS);
   }
+
+  /******************************************************************
+   * スキャナー入力
+   ******************************************************************/
+  document.addEventListener('keydown', (e) => {
+    if (!isEnabled) return;
+    if (inputMode !== 'scanner') return;
+
+    const ignoreKeys = new Set([
+      'Shift',
+      'Control',
+      'Alt',
+      'Meta',
+      'CapsLock',
+      'Tab',
+      'Escape',
+      'ArrowUp',
+      'ArrowDown',
+      'ArrowLeft',
+      'ArrowRight'
+    ]);
+
+    if (ignoreKeys.has(e.key)) return;
+
+    if (e.key === 'Enter') {
+      const current = buffer;
+      processScan(current);
+      buffer = '';
+      elInput.value = '';
+      return;
+    }
+
+    if (e.key === 'Backspace') {
+      buffer = buffer.slice(0, -1);
+      elInput.value = buffer;
+      return;
+    }
+
+    if (e.key.length === 1) {
+      buffer += e.key;
+      elInput.value = buffer;
+    }
+  }, true);
+
+  /******************************************************************
+   * Manual入力欄のリアルタイム表示
+   ******************************************************************/
+  elInput.addEventListener('input', () => {
+    if (inputMode !== 'manual') return;
+    setRaw(elInput.value);
+    setNormalized(normalizeScanText(elInput.value));
+  });
+
+  /******************************************************************
+   * ボタン操作
+   ******************************************************************/
+  elExec.addEventListener('click', () => {
+    const text = elInput.value;
+    processScan(text);
+  });
+
+  elClear.addEventListener('click', () => {
+    buffer = '';
+    elInput.value = '';
+    setRaw('-');
+    setNormalized('-');
+    setResult('待機中');
+    setDetail('-');
+  });
+
+  elToggle.addEventListener('click', () => {
+    isEnabled = !isEnabled;
+    syncToggleUI();
+    setResult(isEnabled ? '機能ON' : '機能OFF');
+  });
+
+  elMode.addEventListener('click', () => {
+    inputMode = inputMode === 'scanner' ? 'manual' : 'scanner';
+    buffer = '';
+    elInput.value = '';
+    syncModeUI();
+    setResult(`入力モード: ${inputMode === 'scanner' ? 'Scanner' : 'Manual'}`);
+    setDetail('-');
+  });
+
+  elMin.addEventListener('click', () => {
+    const isHidden = elBody.style.display === 'none';
+    elBody.style.display = isHidden ? 'block' : 'none';
+    elMin.textContent = isHidden ? '－' : '＋';
+  });
+
+  /******************************************************************
+   * ドラッグ移動
+   ******************************************************************/
+  let dragging = false;
+  let offsetX = 0;
+  let offsetY = 0;
+
+  elHeader.addEventListener('mousedown', (e) => {
+    dragging = true;
+    const rect = panel.getBoundingClientRect();
+    offsetX = e.clientX - rect.left;
+    offsetY = e.clientY - rect.top;
+    panel.style.right = 'auto';
+  });
+
+  document.addEventListener('mousemove', (e) => {
+    if (!dragging) return;
+    panel.style.left = `${e.clientX - offsetX}px`;
+    panel.style.top = `${e.clientY - offsetY}px`;
+  });
+
+  document.addEventListener('mouseup', () => {
+    dragging = false;
+  });
+
+  /******************************************************************
+   * 初期化
+   ******************************************************************/
+  syncToggleUI();
+  syncModeUI();
+  setResult('待機中');
+  setDetail('Scanner / Manual を選択してください');
 
 })();
