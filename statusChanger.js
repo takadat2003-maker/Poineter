@@ -1,5 +1,5 @@
 // ==UserScript==
-// @name         ＃18-13-4-7
+// @name         statusChanger.js
 // @namespace    https://digikar.jp/
 // @version      18.13
 // @match        *://digikar.jp/reception*
