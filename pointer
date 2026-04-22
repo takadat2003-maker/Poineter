@@ -1,0 +1,236 @@
+// ==UserScript==
+// @name         Pointer V1 (改良版)
+// @match        https://digikar.jp/reception/*
+// @match        https://*.digikar.jp/reception/*
+// @grant        none
+// ==/UserScript==
+
+(function () {
+  'use strict';
+
+  /********************
+   * 設定
+   ********************/
+  const SCAN_PREFIX = "SCN:";
+  const PROCESS_LOCK_TIME = 2000;
+
+  let buffer = "";
+  let isProcessing = false;
+  let lastScannedId = "";
+  let lastScanTime = 0;
+
+  let isEnabled = true;
+  let mode = "scanner"; // scanner / manual
+
+  /********************
+   * UI
+   ********************/
+  const panel = document.createElement("div");
+  panel.style.position = "fixed";
+  panel.style.top = "10px";
+  panel.style.right = "10px";
+  panel.style.background = "#222";
+  panel.style.color = "#fff";
+  panel.style.padding = "10px";
+  panel.style.zIndex = 9999;
+  panel.style.fontSize = "12px";
+
+  panel.innerHTML = `
+    <div><b>Pointer V1</b></div>
+
+    <label>
+      <input type="checkbox" id="pointer-enable" checked>
+      ON/OFF
+    </label>
+
+    <br>
+
+    <label>
+      <input type="radio" name="mode" value="scanner" checked>
+      Scanner
+    </label>
+    <label>
+      <input type="radio" name="mode" value="manual">
+      Manual
+    </label>
+
+    <br>
+
+    <input id="pointer-input" placeholder="SCN:123456" style="width:140px;">
+    <button id="pointer-btn">実行</button>
+
+    <div id="pointer-log" style="margin-top:5px;"></div>
+  `;
+
+  document.body.appendChild(panel);
+
+  const inputBox = document.getElementById("pointer-input");
+
+  /********************
+   * UI制御
+   ********************/
+  document.getElementById("pointer-enable").onchange = (e) => {
+    isEnabled = e.target.checked;
+    log("状態: " + (isEnabled ? "ON" : "OFF"));
+  };
+
+  document.querySelectorAll("input[name='mode']").forEach(r => {
+    r.onchange = (e) => {
+      mode = e.target.value;
+      log("モード: " + mode);
+    };
+  });
+
+  document.getElementById("pointer-btn").onclick = () => {
+    processScan(inputBox.value);
+  };
+
+  /********************
+   * ログ
+   ********************/
+  function log(msg) {
+    document.getElementById("pointer-log").innerText = msg;
+    console.log("[Pointer]", msg);
+  }
+
+  /********************
+   * キーボード入力（画面全体）
+   ********************/
+  document.addEventListener("keydown", (e) => {
+
+    if (!isEnabled) return;
+
+    // Manualモードは input にフォーカス
+    if (mode === "manual") {
+      if (document.activeElement !== inputBox) {
+        inputBox.focus();
+      }
+    }
+
+    // Scannerモードのみ buffer使用
+    if (mode === "scanner") {
+      if (e.key === "Enter") {
+        if (buffer.startsWith(SCAN_PREFIX)) {
+          processScan(buffer);
+        }
+        buffer = "";
+      } else if (e.key.length === 1) {
+        buffer += e.key;
+      }
+    }
+
+    // 入力内容を可視化（両モード）
+    if (e.key.length === 1) {
+      inputBox.value += e.key;
+    }
+
+    if (e.key === "Backspace") {
+      inputBox.value = inputBox.value.slice(0, -1);
+    }
+
+    if (e.key === "Enter" && mode === "manual") {
+      processScan(inputBox.value);
+      inputBox.value = "";
+    }
+
+  });
+
+  /********************
+   * メイン処理
+   ********************/
+  function processScan(raw) {
+
+    if (!isEnabled) return;
+    if (isProcessing) return;
+
+    const parsed = parseInput(raw);
+    if (!parsed.ok) {
+      log("入力エラー");
+      return;
+    }
+
+    const patientId = parsed.id;
+
+    // 二重送信防止
+    if (
+      lastScannedId === patientId &&
+      Date.now() - lastScanTime < PROCESS_LOCK_TIME
+    ) {
+      log("二重送信防止");
+      return;
+    }
+
+    isProcessing = true;
+    lastScannedId = patientId;
+    lastScanTime = Date.now();
+
+    log("検索中: " + patientId);
+
+    setTimeout(() => {
+      searchAndSelect(patientId);
+      isProcessing = false;
+    }, 200);
+  }
+
+  /********************
+   * 入力解析
+   ********************/
+  function parseInput(raw) {
+    raw = raw.trim();
+
+    if (!raw.startsWith(SCAN_PREFIX)) {
+      return { ok: false };
+    }
+
+    const id = raw.replace(SCAN_PREFIX, "").trim();
+
+    if (!/^\d+$/.test(id)) {
+      return { ok: false };
+    }
+
+    return { ok: true, id };
+  }
+
+  /********************
+   * DOM走査
+   ********************/
+  function searchAndSelect(patientId) {
+
+    const rows = document.querySelectorAll("tr"); // ←ここは後で調整
+
+    let matches = [];
+
+    rows.forEach(row => {
+      if (row.innerText.includes(patientId)) {
+        matches.push(row);
+      }
+    });
+
+    if (matches.length === 1) {
+      log("一致あり");
+      clickEdit(matches[0]);
+
+    } else if (matches.length === 0) {
+      log("予約なし → デジスマ");
+
+    } else {
+      log("複数候補 → 停止");
+    }
+  }
+
+  /********************
+   * クリック
+   ********************/
+  function clickEdit(row) {
+
+    const btn = row.querySelector("button, .edit, .pencil");
+
+    if (btn) {
+      btn.click();
+      log("受付へ");
+    } else {
+      log("ボタン未検出");
+    }
+  }
+
+})();
