@@ -1,0 +1,997 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AI診察券リーダー</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Zen+Kaku+Gothic+New:wght@400;700;900&family=JetBrains+Mono:wght@400;700&display=swap');
+
+:root {
+  --bg: #0a0c0f;
+  --surface: #111318;
+  --surface2: #181c24;
+  --border: #1e2333;
+  --border2: #2a3050;
+  --accent: #00e5ff;
+  --accent2: #00ff9d;
+  --danger: #ff3d5a;
+  --warn: #ffb300;
+  --text: #dde3f0;
+  --text2: #6b7899;
+  --text3: #363d56;
+  --radius: 14px;
+  --glow: 0 0 24px rgba(0,229,255,0.15);
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  font-family: 'Zen Kaku Gothic New', sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 20px 16px 60px;
+  background-image:
+    radial-gradient(ellipse at 20% 0%, rgba(0,229,255,0.04) 0%, transparent 50%),
+    radial-gradient(ellipse at 80% 100%, rgba(0,255,157,0.03) 0%, transparent 50%);
+}
+
+/* ── Header ─────────────────────────────── */
+header {
+  width: 100%;
+  max-width: 860px;
+  margin-bottom: 24px;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding-bottom: 18px;
+  border-bottom: 1px solid var(--border);
+}
+
+.logo-mark {
+  width: 38px; height: 38px;
+  border-radius: 10px;
+  background: linear-gradient(135deg, var(--accent), var(--accent2));
+  display: flex; align-items: center; justify-content: center;
+  font-size: 18px;
+  flex-shrink: 0;
+  box-shadow: var(--glow);
+}
+
+header h1 {
+  font-size: 18px;
+  font-weight: 900;
+  letter-spacing: -0.5px;
+}
+
+header h1 span {
+  color: var(--accent);
+}
+
+.header-meta {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.chip {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  padding: 3px 8px;
+  border-radius: 4px;
+  border: 1px solid var(--border2);
+  color: var(--text2);
+}
+.chip.ai { border-color: rgba(0,229,255,0.3); color: var(--accent); }
+
+/* ── Layout ─────────────────────────────── */
+.layout {
+  width: 100%;
+  max-width: 860px;
+  display: grid;
+  grid-template-columns: 1fr 300px;
+  gap: 16px;
+}
+@media (max-width: 680px) { .layout { grid-template-columns: 1fr; } }
+
+/* ── Panel ─────────────────────────────── */
+.panel {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 18px;
+}
+
+.panel-label {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  color: var(--text3);
+  margin-bottom: 12px;
+}
+
+/* ── Camera ─────────────────────────────── */
+.cam-wrap {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 4/3;
+  background: #000;
+  border-radius: 10px;
+  overflow: hidden;
+  border: 1px solid var(--border2);
+}
+
+#video {
+  width: 100%; height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+/* Guide overlay */
+.guide {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+/* ラベル全体を囲む枠（画面中央） */
+.guide-box {
+  position: absolute;
+  top: 30%; left: 10%;
+  width: 80%; height: 40%;
+  border: 1.5px solid rgba(0,229,255,0.5);
+  border-radius: 6px;
+  box-shadow: 0 0 0 9999px rgba(0,0,0,0.5);
+}
+
+/* 四隅のコーナー */
+.guide-box::before,
+.guide-box::after {
+  content: '';
+  position: absolute;
+  width: 14px; height: 14px;
+  border-color: var(--accent2);
+  border-style: solid;
+}
+.guide-box::before { top: -2px; left: -2px; border-width: 3px 0 0 3px; }
+.guide-box::after  { bottom: -2px; right: -2px; border-width: 0 3px 3px 0; }
+
+.guide-corner2,
+.guide-corner3 {
+  position: absolute;
+  width: 14px; height: 14px;
+  border-color: var(--accent2);
+  border-style: solid;
+}
+.guide-corner2 { top: -2px; right: -2px; border-width: 3px 3px 0 0; }
+.guide-corner3 { bottom: -2px; left: -2px; border-width: 0 0 3px 3px; }
+
+.guide-hint {
+  position: absolute;
+  bottom: -22px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 10px;
+  color: var(--accent);
+  white-space: nowrap;
+  font-family: 'JetBrains Mono', monospace;
+}
+
+/* Scan flash */
+.flash {
+  position: absolute;
+  inset: 0;
+  background: rgba(0,229,255,0.12);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.1s;
+}
+.flash.active { opacity: 1; }
+
+/* Scan sweep line */
+.sweep {
+  position: absolute;
+  left: 10%; right: 10%;
+  height: 2px;
+  background: linear-gradient(90deg, transparent, var(--accent), transparent);
+  opacity: 0;
+  top: 30%;
+  pointer-events: none;
+}
+.sweep.active {
+  opacity: 1;
+  animation: sweep 0.8s ease-in-out forwards;
+}
+@keyframes sweep {
+  0%   { top: 30%; opacity: 1; }
+  100% { top: 70%; opacity: 0; }
+}
+
+/* Status pill */
+.cam-status {
+  position: absolute;
+  top: 8px; left: 8px;
+  display: flex; align-items: center; gap: 5px;
+  background: rgba(0,0,0,0.7);
+  padding: 3px 10px;
+  border-radius: 20px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  backdrop-filter: blur(4px);
+}
+.dot { width: 6px; height: 6px; border-radius: 50%; background: var(--text3); }
+.dot.live { background: var(--danger); animation: blink 1s infinite; }
+.dot.thinking { background: var(--accent); animation: blink 0.3s infinite; }
+@keyframes blink { 0%,100%{opacity:1} 50%{opacity:0.2} }
+
+/* Cost badge */
+.cost-badge {
+  position: absolute;
+  top: 8px; right: 8px;
+  background: rgba(0,0,0,0.7);
+  padding: 3px 10px;
+  border-radius: 20px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  color: var(--text2);
+  backdrop-filter: blur(4px);
+}
+
+/* ── Buttons ─────────────────────────────── */
+.btn-row {
+  display: flex; gap: 10px; margin-top: 12px;
+}
+
+.btn {
+  flex: 1; padding: 13px;
+  border: none; border-radius: 9px;
+  font-family: 'Zen Kaku Gothic New', sans-serif;
+  font-size: 14px; font-weight: 700;
+  cursor: pointer;
+  transition: all 0.15s;
+  position: relative;
+  overflow: hidden;
+}
+.btn:active { transform: scale(0.97); }
+.btn:disabled { opacity: 0.35; cursor: not-allowed; transform: none; }
+
+.btn-primary {
+  background: linear-gradient(135deg, var(--accent), #0096ff);
+  color: #000;
+  box-shadow: 0 4px 20px rgba(0,229,255,0.25);
+}
+.btn-primary:not(:disabled):hover {
+  box-shadow: 0 4px 28px rgba(0,229,255,0.45);
+}
+
+.btn-ghost {
+  background: var(--surface2);
+  color: var(--text2);
+  border: 1px solid var(--border2);
+}
+.btn-ghost:hover { border-color: var(--accent); color: var(--accent); }
+
+/* thinking animation on button */
+.btn-primary.thinking::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, transparent 0%, rgba(255,255,255,0.3) 50%, transparent 100%);
+  animation: shimmer 0.8s infinite;
+}
+@keyframes shimmer {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(100%); }
+}
+
+/* ── Result ─────────────────────────────── */
+.result-panel {
+  margin-top: 14px;
+  background: var(--surface2);
+  border: 1px solid var(--border2);
+  border-radius: 10px;
+  padding: 18px;
+  min-height: 90px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  transition: border-color 0.3s;
+}
+.result-panel.ok  { border-color: rgba(0,255,157,0.3); }
+.result-panel.err { border-color: rgba(255,61,90,0.3); }
+
+.result-num {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 42px;
+  font-weight: 700;
+  letter-spacing: 8px;
+  color: var(--accent2);
+  transition: all 0.3s;
+}
+.result-num.empty { font-size: 16px; color: var(--text3); letter-spacing: 1px; }
+.result-num.err   { color: var(--danger); font-size: 20px; letter-spacing: 2px; }
+
+.result-tag {
+  font-size: 11px;
+  font-family: 'JetBrains Mono', monospace;
+  padding: 2px 9px; border-radius: 4px; font-weight: 700;
+}
+.tag-ok  { background: rgba(0,255,157,0.1); color: var(--accent2); border: 1px solid rgba(0,255,157,0.25); }
+.tag-ng  { background: rgba(255,61,90,0.1); color: var(--danger);  border: 1px solid rgba(255,61,90,0.25); }
+.tag-wait{ background: rgba(107,120,153,0.1); color: var(--text2); border: 1px solid var(--border2); }
+
+.result-raw {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px; color: var(--text3); margin-top: 2px;
+  max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+
+/* ── Stats ─────────────────────────────── */
+.stats-row {
+  display: grid; grid-template-columns: 1fr 1fr 1fr;
+  gap: 8px; margin-top: 14px;
+}
+.stat {
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 9px; padding: 10px;
+  text-align: center;
+}
+.stat-n {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 24px; font-weight: 700;
+}
+.stat-n.c1 { color: var(--accent); }
+.stat-n.c2 { color: var(--accent2); }
+.stat-n.c3 { color: var(--danger); }
+.stat-l { font-size: 10px; color: var(--text2); margin-top: 2px; letter-spacing: 0.5px; }
+
+.acc-label { display:flex; justify-content:space-between; font-size:11px; color:var(--text2); margin-top:10px; margin-bottom:3px; }
+.acc-bar { height: 5px; background: var(--border); border-radius: 3px; overflow: hidden; }
+.acc-fill { height: 100%; width: 0%; border-radius: 3px; background: var(--accent2); transition: width 0.4s, background 0.4s; }
+
+/* ── Right panel ─────────────────────────── */
+
+/* API Key input */
+.api-key-wrap {
+  position: relative; margin-bottom: 14px;
+}
+.api-key-wrap input {
+  width: 100%;
+  padding: 10px 36px 10px 12px;
+  background: var(--surface2);
+  border: 1px solid var(--border2);
+  border-radius: 8px;
+  color: var(--text);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 12px;
+  outline: none;
+  transition: border-color 0.15s;
+}
+.api-key-wrap input:focus { border-color: var(--accent); }
+.api-key-wrap input::placeholder { color: var(--text3); }
+.eye-btn {
+  position: absolute; right: 8px; top: 50%; transform: translateY(-50%);
+  background: none; border: none; color: var(--text2); cursor: pointer;
+  font-size: 14px; padding: 2px;
+}
+
+.field-label {
+  font-size: 11px; color: var(--text2); margin-bottom: 5px; display: block;
+}
+
+/* Digits input */
+.digits-wrap { margin-bottom: 14px; }
+.digits-wrap input {
+  width: 100%;
+  padding: 9px 12px;
+  background: var(--surface2);
+  border: 1px solid var(--border2);
+  border-radius: 8px;
+  color: var(--text);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 14px;
+  outline: none;
+  transition: border-color 0.15s;
+}
+.digits-wrap input:focus { border-color: var(--accent); }
+
+/* Prompt preview */
+.prompt-box {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  color: var(--text2);
+  line-height: 1.7;
+  margin-bottom: 14px;
+  white-space: pre-wrap;
+}
+
+/* Log */
+.log-wrap {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  height: 180px;
+  overflow-y: auto;
+  padding: 6px;
+}
+.log-item {
+  display: flex; gap: 6px; align-items: baseline;
+  padding: 3px 6px; border-radius: 4px; margin-bottom: 2px;
+  font-family: 'JetBrains Mono', monospace; font-size: 10px;
+}
+.log-item.ok  { background: rgba(0,255,157,0.05); }
+.log-item.ng  { background: rgba(255,61,90,0.05); }
+.log-t  { color: var(--text3); min-width: 50px; }
+.log-r  { color: var(--text); font-weight: 700; }
+.log-ms { color: var(--text2); margin-left: auto; }
+
+/* canvas hidden */
+#canvas { display: none; }
+
+/* notice */
+.notice {
+  width: 100%; max-width: 860px;
+  margin-top: 12px;
+  background: rgba(255,179,0,0.06);
+  border: 1px solid rgba(255,179,0,0.2);
+  border-radius: 8px;
+  padding: 10px 16px;
+  font-size: 11px;
+  color: var(--warn);
+  line-height: 1.7;
+}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="logo-mark">🤖</div>
+  <div>
+    <h1>AI <span>診察券</span> リーダー</h1>
+    <div style="font-size:11px;color:var(--text2);margin-top:2px;">Claude Vision API × カメラ OCR</div>
+  </div>
+  <div class="header-meta">
+    <span class="chip ai">Claude Vision</span>
+    <span class="chip">STANDALONE</span>
+  </div>
+</header>
+
+<div class="layout">
+
+  <!-- 左：カメラ -->
+  <div>
+    <div class="panel">
+      <div class="panel-label">カメラプレビュー</div>
+
+      <div class="cam-wrap">
+        <video id="video" autoplay playsinline muted></video>
+        <canvas id="canvas"></canvas>
+
+        <div class="guide">
+          <div class="guide-box">
+            <div class="guide-corner2"></div>
+            <div class="guide-corner3"></div>
+            <div class="guide-hint">ラベル全体をここに収める</div>
+          </div>
+          <div class="sweep" id="sweep"></div>
+          <div class="flash" id="flash"></div>
+        </div>
+
+        <div class="cam-status">
+          <div class="dot" id="statusDot"></div>
+          <span id="statusText">カメラ未起動</span>
+        </div>
+        <div class="cost-badge" id="costBadge">累計: ¥0</div>
+      </div>
+
+      <div class="btn-row">
+        <button class="btn btn-ghost" id="btnStart">▶ 起動</button>
+        <button class="btn btn-primary" id="btnScan" disabled>🤖 AI読取</button>
+      </div>
+
+      <div class="result-panel" id="resultPanel">
+        <div class="result-num empty" id="resultNum">待機中</div>
+        <div class="result-tag tag-wait" id="resultTag">AIカメラ準備完了待ち</div>
+        <div class="result-raw" id="resultRaw"></div>
+      </div>
+    </div>
+
+    </div>  <!-- /.panel (カメラパネル終わり) -->
+
+    <!-- Pointer連携ステータス -->
+    <div style="
+      margin-top: 8px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 8px 14px;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 11px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    ">
+      <span style="color:var(--text3);">POINTER</span>
+      <span id="pointerStatus" style="color:var(--text3);">待機中</span>
+    </div>
+
+    <div class="stats-row">
+      <div class="stat"><div class="stat-n c1" id="sTotal">0</div><div class="stat-l">読取回数</div></div>
+      <div class="stat"><div class="stat-n c2" id="sOk">0</div><div class="stat-l">成功</div></div>
+      <div class="stat"><div class="stat-n c3" id="sNg">0</div><div class="stat-l">失敗</div></div>
+    </div>
+    <div class="acc-label"><span>正答率</span><span id="accPct">—</span></div>
+    <div class="acc-bar"><div class="acc-fill" id="accFill"></div></div>
+  </div>
+
+  <!-- 右：設定 -->
+  <div style="display:flex;flex-direction:column;gap:14px;">
+
+    <div class="panel">
+      <div class="panel-label">API設定</div>
+
+      <label class="field-label">DigiKar受付URL</label>
+      <div style="display:flex;gap:8px;margin-bottom:14px;align-items:stretch;">
+        <input type="text" id="digikarUrl"
+          placeholder="https://digikar.jp/reception/"
+          value="https://digikar.jp/reception/"
+          style="flex:1;padding:9px 12px;background:var(--surface2);border:1px solid var(--border2);border-radius:8px;color:var(--text);font-family:'JetBrains Mono',monospace;font-size:11px;outline:none;transition:border-color 0.15s;"
+          onfocus="this.style.borderColor='var(--accent)'" onblur="this.style.borderColor='var(--border2)'">
+        <button onclick="openPointerTab()"
+          style="padding:9px 12px;background:var(--surface2);border:1px solid var(--border2);border-radius:8px;color:var(--accent);font-family:'Zen Kaku Gothic New',sans-serif;font-size:12px;font-weight:700;cursor:pointer;white-space:nowrap;"
+          title="digikar.jpをこのボタンで先に開いておくとポップアップブロックを回避できます">
+          🔗 タブを開く
+        </button>
+      </div>
+
+      <label class="field-label">Anthropic APIキー</label>
+      <div class="api-key-wrap">
+        <input type="password" id="apiKey" placeholder="sk-ant-api03-..." autocomplete="off">
+        <button class="eye-btn" id="eyeBtn" title="表示/非表示">👁</button>
+      </div>
+
+      <div class="digits-wrap">
+        <label class="field-label">患者番号の桁数（範囲指定）</label>
+        <div style="display:flex;gap:8px;align-items:center;">
+          <input type="number" id="digitsMin" value="1" min="1" max="10"
+            style="flex:1;padding:9px 12px;background:var(--surface2);border:1px solid var(--border2);border-radius:8px;color:var(--text);font-family:'JetBrains Mono',monospace;font-size:14px;outline:none;">
+          <span style="color:var(--text2);font-size:12px;">〜</span>
+          <input type="number" id="digitsMax" value="5" min="1" max="10"
+            style="flex:1;padding:9px 12px;background:var(--surface2);border:1px solid var(--border2);border-radius:8px;color:var(--text);font-family:'JetBrains Mono',monospace;font-size:14px;outline:none;">
+          <span style="color:var(--text2);font-size:12px;">桁</span>
+        </div>
+      </div>
+
+      <label class="field-label">AIへの指示（プロンプト）</label>
+      <div class="prompt-box" id="promptPreview"></div>
+
+      <label class="field-label">カメラ選択</label>
+      <select id="camSelect" style="width:100%;padding:9px 12px;background:var(--surface2);border:1px solid var(--border2);border-radius:8px;color:var(--text);font-size:13px;outline:none;">
+        <option value="">— 検索中 —</option>
+      </select>
+    </div>
+
+    <div class="panel">
+      <div class="panel-label" style="display:flex;justify-content:space-between;">
+        読取ログ
+        <button onclick="clearLog()" style="background:none;border:none;color:var(--text3);font-size:10px;cursor:pointer;font-family:'Zen Kaku Gothic New',sans-serif;">クリア</button>
+      </div>
+      <div class="log-wrap" id="logWrap">
+        <div style="color:var(--text3);font-size:10px;padding:4px 6px;">ここに結果が蓄積されます</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="notice">
+  ⚠️ APIキーはこのページ内のみで使用され、外部サーバーには送信されません（Claude API直接呼び出し）。
+  セキュリティのため使用後はブラウザを閉じてください。
+  1回の読取コスト目安：約0.3〜0.5円（claude-haiku使用時）
+</div>
+
+<script>
+// ── State ─────────────────────────────────────────────
+let stream = null;
+let scanning = false;
+let totalCost = 0;
+let stats = { total: 0, ok: 0, ng: 0 };
+
+const video     = document.getElementById('video');
+const canvas    = document.getElementById('canvas');
+const ctx       = canvas.getContext('2d');
+const btnStart  = document.getElementById('btnStart');
+const btnScan   = document.getElementById('btnScan');
+const statusDot = document.getElementById('statusDot');
+const statusText= document.getElementById('statusText');
+const logWrap   = document.getElementById('logWrap');
+
+// ── Prompt ────────────────────────────────────────────
+function getDigits() {
+  const mn = parseInt(document.getElementById('digitsMin').value) || 1;
+  const mx = parseInt(document.getElementById('digitsMax').value) || 5;
+  return { min: Math.min(mn, mx), max: Math.max(mn, mx) };
+}
+
+function getPrompt() {
+  const { min, max } = getDigits();
+  const range = min === max ? `${min}桁` : `${min}〜${max}桁`;
+  return `この画像はクリニックの診察券です。
+テプラ（ラベルライター）で印字されたラベルに患者番号が記載されています。
+ラベルの先頭にある${range}の数字（患者番号）だけを読み取り、その数字のみを返してください。
+カタカナの氏名が続く場合は無視してください。
+数字のみを返し、それ以外の文字・説明・句読点は一切含めないでください。
+読み取れない場合は「UNKNOWN」とだけ返してください。`;
+}
+
+function updatePromptPreview() {
+  document.getElementById('promptPreview').textContent = getPrompt();
+}
+document.getElementById('digitsMin').addEventListener('input', updatePromptPreview);
+document.getElementById('digitsMax').addEventListener('input', updatePromptPreview);
+updatePromptPreview();
+
+// ── Eye toggle ────────────────────────────────────────
+document.getElementById('eyeBtn').addEventListener('click', () => {
+  const inp = document.getElementById('apiKey');
+  inp.type = inp.type === 'password' ? 'text' : 'password';
+});
+
+// ── Camera enum ───────────────────────────────────────
+async function enumCameras() {
+  try {
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    const cams = devices.filter(d => d.kind === 'videoinput');
+    const sel = document.getElementById('camSelect');
+    sel.innerHTML = '';
+    cams.forEach((c, i) => {
+      const o = document.createElement('option');
+      o.value = c.deviceId;
+      o.textContent = c.label || `カメラ ${i+1}`;
+      sel.appendChild(o);
+    });
+    if (!cams.length) sel.innerHTML = '<option>カメラが見つかりません</option>';
+  } catch(e) {}
+}
+enumCameras();
+
+// ── Start / Stop camera ───────────────────────────────
+btnStart.addEventListener('click', async () => {
+  if (stream) {
+    stream.getTracks().forEach(t => t.stop());
+    stream = null;
+    video.srcObject = null;
+    statusDot.className = 'dot';
+    statusText.textContent = 'カメラ未起動';
+    btnStart.textContent = '▶ 起動';
+    btnScan.disabled = true;
+    return;
+  }
+  const deviceId = document.getElementById('camSelect').value;
+  const constraints = {
+    video: deviceId
+      ? { deviceId: { exact: deviceId }, width: { ideal: 1280 }, height: { ideal: 720 } }
+      : { width: { ideal: 1280 }, height: { ideal: 720 } }
+  };
+  try {
+    stream = await navigator.mediaDevices.getUserMedia(constraints);
+    video.srcObject = stream;
+    statusDot.className = 'dot live';
+    statusText.textContent = 'LIVE';
+    btnStart.textContent = '⏹ 停止';
+    btnScan.disabled = false;
+    await enumCameras();
+  } catch(e) {
+    alert('カメラアクセスに失敗しました。\n' + e.message);
+  }
+});
+
+// ── Capture frame as base64 ───────────────────────────
+function captureFrame() {
+  const W = video.videoWidth;
+  const H = video.videoHeight;
+  if (!W || !H) return null;
+  canvas.width  = W;
+  canvas.height = H;
+  ctx.drawImage(video, 0, 0, W, H);
+  // ガイド枠エリアをクロップ（中央80%幅、上下30〜70%）
+  const cx = Math.floor(W * 0.10);
+  const cy = Math.floor(H * 0.30);
+  const cw = Math.floor(W * 0.80);
+  const ch = Math.floor(H * 0.40);
+  const imageData = ctx.getImageData(cx, cy, cw, ch);
+  canvas.width  = cw;
+  canvas.height = ch;
+  ctx.putImageData(imageData, 0, 0);
+  // base64（JPEG 品質0.92）
+  return canvas.toDataURL('image/jpeg', 0.92).split(',')[1];
+}
+
+// ── Call Claude API ───────────────────────────────────
+async function callClaude(base64Image) {
+  const apiKey = document.getElementById('apiKey').value.trim();
+  if (!apiKey) throw new Error('APIキーを入力してください');
+
+  const response = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-api-key': apiKey,
+      'anthropic-version': '2023-06-01',
+      'anthropic-dangerous-direct-browser-access': 'true',
+    },
+    body: JSON.stringify({
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 32,
+      messages: [{
+        role: 'user',
+        content: [
+          {
+            type: 'image',
+            source: {
+              type: 'base64',
+              media_type: 'image/jpeg',
+              data: base64Image,
+            }
+          },
+          {
+            type: 'text',
+            text: getPrompt()
+          }
+        ]
+      }]
+    })
+  });
+
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({}));
+    throw new Error(err?.error?.message || `HTTP ${response.status}`);
+  }
+  return await response.json();
+}
+
+// ── Flash animation ───────────────────────────────────
+function doFlash() {
+  const f = document.getElementById('flash');
+  const s = document.getElementById('sweep');
+  f.classList.add('active');
+  s.classList.remove('active');
+  void s.offsetWidth; // reflow
+  s.classList.add('active');
+  setTimeout(() => f.classList.remove('active'), 120);
+}
+
+// ── Scan ──────────────────────────────────────────────
+btnScan.addEventListener('click', doScan);
+document.addEventListener('keydown', e => {
+  if (e.code === 'Space' && !btnScan.disabled && !scanning) {
+    e.preventDefault(); doScan();
+  }
+});
+
+async function doScan() {
+  if (scanning) return;
+  const apiKey = document.getElementById('apiKey').value.trim();
+  if (!apiKey) {
+    alert('右パネルにAnthropicのAPIキーを入力してください。');
+    return;
+  }
+
+  scanning = true;
+  btnScan.disabled = true;
+  btnScan.classList.add('thinking');
+  statusDot.className = 'dot thinking';
+  statusText.textContent = 'AI処理中...';
+  doFlash();
+
+  const t0 = performance.now();
+
+  try {
+    const base64 = captureFrame();
+    if (!base64) throw new Error('カメラ映像を取得できませんでした');
+
+    const result = await callClaude(base64);
+    const elapsed = Math.round(performance.now() - t0);
+
+    // レスポンス解析
+    const rawText = result.content?.[0]?.text?.trim() ?? '';
+
+    // トークンからコスト概算（Haiku: input $0.80/Mtoken, output $4/Mtoken）
+    const inTok  = result.usage?.input_tokens  ?? 0;
+    const outTok = result.usage?.output_tokens ?? 0;
+    const costYen = (inTok * 0.0008 + outTok * 0.004) / 1000 * 150;
+    totalCost += costYen;
+    document.getElementById('costBadge').textContent =
+      `累計: ¥${totalCost.toFixed(2)}`;
+
+    const { min, max } = getDigits();
+    const match  = rawText.match(/^\d+/);
+    const numStr = match ? match[0].slice(0, max) : '';
+    const isOk   = numStr.length >= min && numStr.length <= max && rawText !== 'UNKNOWN';
+
+    showResult(numStr, rawText, isOk, elapsed, min, max);
+    addLog(numStr, isOk, elapsed);
+    updateStats(isOk);
+
+    // ── Pointer連携送信 ─────────────────────────────────
+    if (isOk && numStr) {
+      sendToPointer(numStr);
+    }
+
+  } catch(e) {
+    showResult('', e.message, false, Math.round(performance.now() - t0), 0);
+    addLog('ERROR', false, 0);
+    updateStats(false);
+  }
+
+  scanning = false;
+  btnScan.disabled = false;
+  btnScan.classList.remove('thinking');
+  statusDot.className = 'dot live';
+  statusText.textContent = 'LIVE';
+}
+
+// ── Display result ────────────────────────────────────
+function showResult(num, raw, isOk, ms, min, max) {
+  const panel  = document.getElementById('resultPanel');
+  const numEl  = document.getElementById('resultNum');
+  const tagEl  = document.getElementById('resultTag');
+  const rawEl  = document.getElementById('resultRaw');
+  const range  = min === max ? `${min}桁` : `${min}〜${max}桁`;
+
+  panel.className = 'result-panel ' + (isOk ? 'ok' : 'err');
+
+  if (isOk) {
+    numEl.className = 'result-num';
+    numEl.textContent = num;
+    tagEl.className = 'result-tag tag-ok';
+    tagEl.textContent = `OK — ${num.length}桁取得  ${ms}ms`;
+  } else {
+    numEl.className = 'result-num err';
+    numEl.textContent = num || 'NG';
+    tagEl.className = 'result-tag tag-ng';
+    tagEl.textContent = `NG — ${range}範囲外 (${num.length}桁)  ${ms}ms`;
+  }
+  rawEl.textContent = 'AI生出力: ' + (raw || '—');
+}
+
+// ── Log ──────────────────────────────────────────────
+function addLog(num, isOk, ms) {
+  if (logWrap.children.length === 1 && logWrap.children[0].tagName !== 'DIV'.toUpperCase() === false
+      && logWrap.children[0].className === '') {
+    logWrap.innerHTML = '';
+  }
+  if (logWrap.children[0]?.style?.color === '') logWrap.innerHTML = '';
+
+  const t = new Date().toLocaleTimeString('ja-JP', { hour:'2-digit', minute:'2-digit', second:'2-digit' });
+  const div = document.createElement('div');
+  div.className = 'log-item ' + (isOk ? 'ok' : 'ng');
+  div.innerHTML = `<span class="log-t">${t}</span><span class="log-r">${num}</span><span class="log-ms">${ms}ms</span>`;
+  logWrap.insertBefore(div, logWrap.firstChild);
+}
+
+function clearLog() {
+  stats = { total: 0, ok: 0, ng: 0 };
+  totalCost = 0;
+  document.getElementById('sTotal').textContent = '0';
+  document.getElementById('sOk').textContent    = '0';
+  document.getElementById('sNg').textContent    = '0';
+  document.getElementById('accPct').textContent = '—';
+  document.getElementById('accFill').style.width = '0%';
+  document.getElementById('costBadge').textContent = '累計: ¥0';
+  logWrap.innerHTML = '<div style="color:var(--text3);font-size:10px;padding:4px 6px;">ここに結果が蓄積されます</div>';
+}
+
+function updateStats(isOk) {
+  stats.total++;
+  if (isOk) stats.ok++; else stats.ng++;
+  document.getElementById('sTotal').textContent = stats.total;
+  document.getElementById('sOk').textContent    = stats.ok;
+  document.getElementById('sNg').textContent    = stats.ng;
+  const pct = Math.round(stats.ok / stats.total * 100);
+  document.getElementById('accPct').textContent = pct + '%';
+  const fill = document.getElementById('accFill');
+  fill.style.width = pct + '%';
+  fill.style.background = pct >= 90 ? 'var(--accent2)' : pct >= 70 ? 'var(--warn)' : 'var(--danger)';
+}
+// ── Pointer連携 ───────────────────────────────────────
+// URLパラメータ方式（オリジン・別ウィンドウ問題を完全回避）
+// + postMessage（タブ参照あり時）+ BroadcastChannel（同一オリジン時）
+let _pointerChannel = null;
+let _pointerTabRef = null;  // 開いたdigikarタブの参照
+
+function getPointerChannel() {
+  if (!_pointerChannel) {
+    try { _pointerChannel = new BroadcastChannel('pointer-ocr'); } catch(e) {}
+  }
+  return _pointerChannel;
+}
+
+function getDigikarBaseUrl() {
+  const inp = document.getElementById('digikarUrl');
+  return (inp && inp.value.trim()) || 'https://digikar.jp/reception/';
+}
+
+function openPointerTab() {
+  const baseUrl = getDigikarBaseUrl();
+  _pointerTabRef = window.open(baseUrl, 'digikar-pointer');
+  if (_pointerTabRef) {
+    updatePointerStatus('タブ接続済', 'tab-opened');
+  } else {
+    alert('ポップアップがブロックされました。\nアドレスバー右端の「ポップアップをブロック」を許可してください。');
+  }
+}
+
+function sendToPointer(patientNo) {
+  const payload = { patientNo: String(patientNo), source: 'ai-ocr', ts: Date.now() };
+  let method = 'none';
+
+  // 方式①: BroadcastChannel（同一オリジン・同一ウィンドウなら届く）
+  const ch = getPointerChannel();
+  if (ch) {
+    try { ch.postMessage(payload); method = 'BC'; } catch(e) {}
+  }
+
+  // 方式②: postMessage（window.open で取得したタブ参照がある場合）
+  let pmSent = false;
+  if (_pointerTabRef && !_pointerTabRef.closed) {
+    try {
+      _pointerTabRef.postMessage(payload, '*');
+      pmSent = true;
+      method = (method === 'BC') ? 'BC+PM' : 'postMessage';
+    } catch(e) {}
+  }
+
+  // 方式③: URLパラメータで既存タブに送る（最も確実、別ウィンドウでも動作）
+  const baseUrl = getDigikarBaseUrl();
+  const targetUrl = baseUrl.split('?')[0]
+    + '?pointer_ocr=' + encodeURIComponent(patientNo)
+    + '&pointer_ts=' + payload.ts;
+
+  if (!pmSent) {
+    if (_pointerTabRef && !_pointerTabRef.closed) {
+      try {
+        _pointerTabRef.location.href = targetUrl;
+        method += '+URL';
+      } catch(e) {
+        // クロスオリジンでlocation変更不可の場合は新タブ
+        _pointerTabRef = window.open(targetUrl, 'digikar-pointer');
+        method += '+URL(new)';
+      }
+    } else {
+      // タブ参照なし → 新タブを開く
+      _pointerTabRef = window.open(targetUrl, 'digikar-pointer');
+      method = 'URL-newtab';
+    }
+  }
+
+  updatePointerStatus(patientNo, method);
+  console.log('[AI-OCR] Pointer送信:', payload, '方式:', method);
+}
+
+function updatePointerStatus(patientNo, method) {
+  const el = document.getElementById('pointerStatus');
+  if (!el) return;
+  el.textContent = '→ Pointer送信: ' + patientNo + '  [' + method + ']';
+  el.style.color = 'var(--accent2)';
+  setTimeout(() => {
+    el.textContent = '待機中';
+    el.style.color = 'var(--text3)';
+  }, 4000);
+}
+</script>
+</body>
+</html>
+
